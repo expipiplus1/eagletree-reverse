@@ -13,7 +13,7 @@ build-type:          Simple
 extra-source-files:  default.nix shell.nix
 cabal-version:       >=1.10
 
-executable upfind
+executable reverse
   hs-source-dirs:      src
   main-is:             Main.hs
   other-modules:       FrameBits
@@ -34,7 +34,6 @@ executable upfind
                      , data-default-class
                      , extra
                      , ffmpeg-light
-                     , friday
                      , lens
                      , say
                      , vector
