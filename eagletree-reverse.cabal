@@ -30,6 +30,7 @@ executable reverse
                      , conduit-extra
                      , text
                      , transformers
+                     , integer-gmp
                      , conduit-combinators
                      , data-default-class
                      , extra

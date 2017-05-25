@@ -1,6 +1,8 @@
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
 {-# LANGUAGE LambdaCase                 #-}
-{-# LANGUAGE OverloadedLists            #-}
+{-# LANGUAGE MagicHash                  #-}
+{-# LANGUAGE OverloadedStrings          #-}
+{-# LANGUAGE ViewPatterns               #-}
 
 module Telemetry
   where
@@ -17,12 +19,16 @@ import           Data.Int
 import           Data.List.Extra           (chunksOf, genericLength, sortOn)
 import qualified Data.List.NonEmpty        as NE
 import           Data.Maybe
+import           Data.Semigroup
 import qualified Data.Text                 as T
 import qualified Data.Vector               as V
 import           Data.Word
+import           GHC.Base                  (Int (..))
+import           GHC.Integer.Logarithms
 import           Graph
 import           Numeric
 import           Numeric.Natural
+import           Say
 
 newtype ShowHex a = ShowHex { unShowHex :: a }
   deriving(Eq, Ord, Num)
@@ -40,7 +46,10 @@ data Packet
   -- = Type7584 Word16 Word16 Word16 Word16 Word16
   -- | Type49344 Word16 Word16 Word16 Word16 Word16
   --                    Word16 Word16 Word16 Word16
-  = Unknown Payload
+  -- = TypeC Word16 Word16 Word8 Word16 Int16
+  -- = TypeC Word16 Word16 Word8 Word16 Word16
+  = TypeC Word16 Word16 Word8 Int16 Int16
+  | Unknown Payload
   | Error Tag Payload T.Text
   deriving (Show)
 
@@ -58,37 +67,100 @@ splitBytes = concatMapC $ \case
   Nothing -> [Nothing] :: [Maybe Word8]
   Just x -> [Just (fromIntegral (x `shiftR` 8)), Just (fromIntegral x)]
 
-parse :: Monad m => Conduit (Maybe Word8) m Packet
-parse = do
-  dropWhileC isNothing
-  p <- parseUnknownPayload
-  unless (V.null (unPayload p)) $ do
-    yield (Unknown p)
-    parse
+parse :: MonadIO m => Conduit (Maybe Word8) m Packet
+parse =
+  parseTag >>= \case
+    Nothing -> pure ()
+    Just (Tag 0xc) -> do
+      parseC >>= \case
+        Nothing -> pure ()
+        Just p -> yield p
+      parse
+    -- Just (Tag 49344) -> do
+    --   parse49344 >>= \case
+    --     Nothing -> pure ()
+    --     Just p -> yield p
+    --   parse
+    Just _unknownTag -> do
+      payload <- parseUnknownPayload
+      yield (Unknown payload)
+      parse
 
-  -- parseTag >>= \case
-  --   Nothing -> pure ()
-  --   -- Just (Tag 7584) -> do
-  --   --   parse7584 >>= \case
-  --   --     Nothing -> pure ()
-  --   --     Just p -> yield p
-  --   --   parse
-  --   -- Just (Tag 49344) -> do
-  --   --   parse49344 >>= \case
-  --   --     Nothing -> pure ()
-  --   --     Just p -> yield p
-  --   --   parse
-  --   Just unknownTag -> do
-  --     payload <- parseUnknownPayload
-  --     yield (Unknown unknownTag payload)
-  --     parse
+parseC :: MonadIO m => ConduitM (Maybe Word8) o m (Maybe Packet)
+parseC = runMaybeC $ do
+  expect 0xe
+  expect 0x0
+  expect 0x42
+  expect 0x0
+  expect 0x2
+  a <- parse16
+  expect 0x0
+  expect 0x2
+  b <- fromInteger . deGapAll <$> parse16
+  c <- fromInteger . deGapAll <$> parse8
+  expect 0x2
+  d <- fromInteger . deGapAll . (fromIntegral :: Word16 -> Int16) <$> parse16
+  e <- fromInteger . deGapAll . (fromIntegral :: Word16 -> Int16) <$> parse16
+  expect 0x0
+  expect 0x6
+  pure $ TypeC a b c d e
 
--- parseTag :: Monad m => ConduitM (Maybe Word16) o m (Maybe Tag)
--- parseTag =
---   await >>= \case
---     Nothing -> pure Nothing
---     Just Nothing -> parseTag
---     Just (Just tag) -> pure (Just (Tag (ShowHex (tag .&. 0xff))))
+deGapAll :: Integral a => a -> Integer
+deGapAll = appEndo (foldMap (Endo . deGap) [5,9..13]) . toInteger
+
+deGap :: Integral a => Integer -> a -> Integer
+deGap gapPower x =
+  let p = 2 ^ gapPower
+      gap = (p * 3) `div` 4
+      d = toInteger x `div` (p * 2)
+  in toInteger x - d * gap
+
+wrapAt :: Integral a => Integer -> a -> Integer
+wrapAt bound (toInteger -> x) =
+  if x > bound
+    then x - bound
+    else x
+
+nextPow2 :: Integer -> Integer
+nextPow2 = (2^) . toInteger . clog2 . fromInteger
+
+clog2 :: Natural -> Natural
+clog2 x = flog2 (x * 2 - 1)
+
+flog2 :: Natural -> Natural
+flog2 x = fromIntegral (I# (integerLog2# (toInteger x)))
+
+parse8 :: Monad m => ConduitM (Maybe Word8) o (MaybeT m) Word8
+parse8 =
+  await >>= \case
+    Just (Just x) -> pure x
+    _ -> lift empty
+
+parse16 :: Monad m => ConduitM (Maybe Word8) o (MaybeT m) Word16
+parse16 = do
+  first <- await
+  second <- await
+  case (first, second) of
+    (Just (Just a), Just (Just b))
+      -> pure $ fromIntegral a `shiftL` 8 .|. fromIntegral b
+    _ -> lift empty
+
+expect :: (MonadIO m) => Word8 -> ConduitM (Maybe Word8) o (MaybeT m) ()
+expect n =
+  await >>= \case
+    Just (Just x)
+      | x == n -> pure ()
+      | otherwise -> liftIO (sayErr ("expected " <> show' n <> " got " <> show' x))
+    _ -> lift empty
+
+show' = T.pack . show
+
+parseTag :: Monad m => ConduitM (Maybe Word8) o m (Maybe Tag)
+parseTag =
+  await >>= \case
+    Nothing -> pure Nothing
+    Just Nothing -> parseTag
+    Just (Just tag) -> pure (Just (Tag (ShowHex tag)))
 
 -- parse7584 :: Monad m => ConduitM (Maybe Word16) o m (Maybe Packet)
 -- parse7584 = runMaybeC $
@@ -121,21 +193,47 @@ parseUnknownPayload = Payload . fmap ShowHex <$> go mempty
         Just Nothing -> pure s
         Just (Just w) -> go (s `V.snoc` w)
 
-isCE :: Packet -> Bool
-isCE (Unknown (Payload p)) = V.take 2 p == [0xc, 0xe]
+isC :: Packet -> Bool
+isC = \case
+  (TypeC {}) -> True
+  _ -> False
 
 isA0 :: Packet -> Bool
 isA0 (Unknown (Payload p)) = p V.! 1 == 0xa0
 
 myFilter :: V.Vector Packet -> V.Vector Packet
-myFilter = V.filter (none [isCE, isA0])
+myFilter = V.filter (none [isC, isA0])
 
 none :: [a -> Bool] -> a -> Bool
 none fs x = not $ any ($x) fs
 
-graphCE :: V.Vector Packet -> IO ()
-graphCE =
-  graphAll . fmap (fmap unGap) . fmap unSplit . fmap (\(Unknown (Payload p)) -> fmap unShowHex p) . V.filter isCE
+graphC :: V.Vector Packet -> IO ()
+graphC =
+  let fs =
+        [ \(TypeC x _ _ _ _) -> realToFrac x
+        , \(TypeC _ x _ _ _) -> realToFrac x
+        , \(TypeC _ _ x _ _) -> realToFrac x
+        , \(TypeC _ _ _ x _) -> realToFrac x
+        , \(TypeC _ _ _ _ x) -> realToFrac x
+        ]
+  in graphAll fs . V.filter isC
+
+offsetsC :: V.Vector Packet -> [(Int16, Integer)]
+offsetsC =
+  fmap (\(a, b) -> (a, toInteger b - toInteger a)) .
+  (zip <*> tail) . V.toList . fmap (\(TypeC _ _ _ _ x) -> x) . V.filter isC
+
+offsets2C :: V.Vector Packet -> [Integer]
+offsets2C ps =
+  let os = snd <$> offsetsC ps
+      ds = (zipWith (-) <*> tail) . (filter ((<10000) . abs)) $ os
+  in ds
+
+score :: FilePath -> IO Integer
+score f = do
+  ps <- parseFile f
+  let is = offsets2C ps
+  pure $ sum (abs <$> is)
 
 sign :: Word16 -> Int16
 sign = fromIntegral

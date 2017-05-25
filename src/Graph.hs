@@ -24,9 +24,9 @@ import           Numeric.Natural
 signal :: [Double] -> [(Double,Double)]
 signal xs = [ (x,(sin (x*3.14159/45) + 1) / 2 * (sin (x*3.14159/5))) | x <- xs ]
 
-graphAll :: Real a => V.Vector (V.Vector a) -> IO ()
-graphAll ss =
-  forM_ (V.indexed (transpose ss)) $ \(i, s) -> do
+graphAll :: [a -> Double] -> V.Vector a -> IO ()
+graphAll fs dat =
+  forM_ (V.indexed ((\f -> f <$> dat) <$> V.fromList fs)) $ \(i, s) -> do
     toFile (FileOptions (1000,1000) SVG) (show i ++ ".svg") $ do
       let ps :: [(Double, Double)]
           ps = zip [0..] (fmap realToFrac . V.toList $ s)
@@ -42,3 +42,11 @@ colorList = take 100 (cycle [red, orange, yellow, green, blue, indigo])
 
 transpose :: V.Vector (V.Vector a) -> V.Vector (V.Vector a)
 transpose = V.fromList . fmap V.fromList . L.transpose . fmap V.toList . V.toList
+
+hist :: [Integer] -> IO ()
+hist dat =
+  toFile (FileOptions (800, 800) SVG) "hist.svg" $
+    plot $ fmap histToPlot $ liftEC $ do
+      plot_hist_bins .= 1000
+      plot_hist_values .= (fmap realToFrac dat :: [Double])
+      plot_hist_norm_func .= const id
