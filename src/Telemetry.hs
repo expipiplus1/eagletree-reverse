@@ -81,9 +81,9 @@ parse =
     --     Nothing -> pure ()
     --     Just p -> yield p
     --   parse
-    Just _unknownTag -> do
-      payload <- parseUnknownPayload
-      yield (Unknown payload)
+    Just (Tag unknownTag) -> do
+      Payload payload <- parseUnknownPayload
+      yield (Unknown (Payload $ unknownTag `V.cons` payload))
       parse
 
 parseC :: MonadIO m => ConduitM (Maybe Word8) o m (Maybe Packet)
