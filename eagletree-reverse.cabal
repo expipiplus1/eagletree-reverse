@@ -21,6 +21,10 @@ executable reverse
   build-depends:       base
                      , bytestring
                      , Chart
+                     , conduit-parse
+                     , parsers
+                     , containers
+                     , vector-algorithms
                      , Chart-cairo
                      , JuicyPixels
                      , JuicyPixels-extra

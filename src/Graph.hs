@@ -24,10 +24,10 @@ import           Numeric.Natural
 signal :: [Double] -> [(Double,Double)]
 signal xs = [ (x,(sin (x*3.14159/45) + 1) / 2 * (sin (x*3.14159/5))) | x <- xs ]
 
-graphAll :: [a -> Double] -> V.Vector a -> IO ()
-graphAll fs dat =
+graphAll :: String -> [a -> Double] -> V.Vector a -> IO ()
+graphAll prefix fs dat =
   forM_ (V.indexed ((\f -> f <$> dat) <$> V.fromList fs)) $ \(i, s) -> do
-    toFile (FileOptions (1000,1000) SVG) (show i ++ ".svg") $ do
+    toFile (FileOptions (1000,1000) SVG) (prefix ++ show i ++ ".svg") $ do
       let ps :: [(Double, Double)]
           ps = zip [0..] (fmap realToFrac . V.toList $ s)
       setColors [opaque blue, opaque red]

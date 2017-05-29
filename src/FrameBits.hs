@@ -19,8 +19,8 @@ data FrameBits = FrameBits
   }
   deriving(Show)
 
-extractWords :: FrameBits -> Vector 5 (Maybe Word16)
-extractWords (FrameBits bits t i) = fmap (findNothing . bitsToNat . VS.reverse) bits
+extractWordsCareful :: FrameBits -> Vector 5 (Maybe Word16)
+extractWordsCareful (FrameBits bits t i) = fmap (findNothing . bitsToNat . VS.reverse) bits
   where
     err :: String -> a
     err s = error (s <> " at time " <> show t <> " and index " <> show i)
@@ -33,8 +33,17 @@ extractWords (FrameBits bits t i) = fmap (findNothing . bitsToNat . VS.reverse) 
             else if testBit n 0
                    then err "bit 0 and others set"
                    else if testBit n 1
-                          then Just (fromIntegral n)
+                          then Just (fromIntegral (n `shiftR` 2))
                           else err ("neither bit 1 nor 0 set " <> show n)
+
+extractWords :: FrameBits -> Vector 5 (Maybe Word16)
+extractWords (FrameBits bits _ _) = fmap (findNothing . bitsToNat . VS.reverse) bits
+  where
+    findNothing :: Natural -> Maybe Word16
+    findNothing n =
+      if testBit n 0
+        then Nothing
+        else Just (fromIntegral (n `shiftR` 2))
 
 bitsToNat :: Vector n Bool -> Natural
 bitsToNat = foldl' (\n b -> (n `shiftL` 1) + if b then 1 else 0) 0

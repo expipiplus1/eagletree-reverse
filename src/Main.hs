@@ -42,7 +42,8 @@ readBits :: Image Pixel8 -> Double -> Natural -> FrameBits
 readBits image = FrameBits (generate (\row -> generate (\col -> pixelAt image col row > maxBound `div` 2)))
 
 cropBitPixels :: Image Pixel8 -> Image Pixel8
-cropBitPixels = extractLumaPlane . scaleBilinear 23 5 . promoteImage . crop 0 0 maxBound 10
+-- cropBitPixels = extractLumaPlane . scaleBilinear 23 5 . promoteImage . crop 0 0 maxBound 10
+cropBitPixels = extractLumaPlane . scaleBilinear 23 5 . promoteImage . crop 70 0 782 10
 
 printBits :: MonadIO m => Consumer FrameBits m ()
 printBits = mapFoldable extractWords =$= printC

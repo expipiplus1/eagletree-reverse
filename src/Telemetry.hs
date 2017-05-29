@@ -14,6 +14,7 @@ import           Control.Monad
 import           Control.Monad.Trans.Maybe
 import           Data.Bits
 import qualified Data.ByteString.Char8     as BS8
+import qualified Data.Conduit.List         as CL
 import           Data.Foldable
 import           Data.Int
 import           Data.List.Extra           (chunksOf, genericLength, sortOn)
@@ -29,6 +30,8 @@ import           Graph
 import           Numeric
 import           Numeric.Natural
 import           Say
+
+import qualified Parse
 
 newtype ShowHex a = ShowHex { unShowHex :: a }
   deriving(Eq, Ord, Num)
@@ -56,7 +59,13 @@ data Packet
 parseFile :: FilePath -> IO (V.Vector Packet)
 parseFile file =
   runResourceT . runConduit $
-  (sourceFile file =$= linesUnboundedAsciiC =$= mapC readBS =$= splitBytes =$= parse =$=
+  (sourceFile file =$= linesUnboundedAsciiC =$= mapC readBS =$= swapPairs =$= splitBytes =$= parse =$=
+   sinkVector)
+
+parseFile' :: FilePath -> IO (V.Vector Parse.Packet)
+parseFile' file =
+  runResourceT . runConduit $
+  (sourceFile file =$= linesUnboundedAsciiC =$= mapC readBS =$= splitBytes =$= Parse.parse =$=
    sinkVector)
 
 readBS :: Read a => BS8.ByteString -> a
@@ -66,6 +75,9 @@ splitBytes :: Monad m => Conduit (Maybe Word16) m (Maybe Word8)
 splitBytes = concatMapC $ \case
   Nothing -> [Nothing] :: [Maybe Word8]
   Just x -> [Just (fromIntegral (x `shiftR` 8)), Just (fromIntegral x)]
+
+swapPairs :: Monad m => Conduit (Maybe Word16) m (Maybe Word16)
+swapPairs = CL.chunksOf 2 =$= mapC reverse =$= concatC
 
 parse :: MonadIO m => Conduit (Maybe Word8) m Packet
 parse =
@@ -92,9 +104,11 @@ parseC = runMaybeC $ do
   expect 0x0
   expect 0x42
   expect 0x0
+
   expect 0x2
   a <- parse16
   expect 0x0
+
   expect 0x2
   b <- fromInteger . deGapAll <$> parse16
   c <- fromInteger . deGapAll <$> parse8
@@ -198,6 +212,11 @@ isC = \case
   (TypeC {}) -> True
   _ -> False
 
+isUnknown :: Packet -> Bool
+isUnknown = \case
+  (Unknown {}) -> True
+  _ -> False
+
 isA0 :: Packet -> Bool
 isA0 (Unknown (Payload p)) = p V.! 1 == 0xa0
 
@@ -207,16 +226,63 @@ myFilter = V.filter (none [isC, isA0])
 none :: [a -> Bool] -> a -> Bool
 none fs x = not $ any ($x) fs
 
-graphC :: V.Vector Packet -> IO ()
-graphC =
+graph3 :: V.Vector Parse.Packet -> IO ()
+graph3 =
   let fs =
-        [ \(TypeC x _ _ _ _) -> realToFrac x
-        , \(TypeC _ x _ _ _) -> realToFrac x
-        , \(TypeC _ _ x _ _) -> realToFrac x
-        , \(TypeC _ _ _ x _) -> realToFrac x
-        , \(TypeC _ _ _ _ x) -> realToFrac x
+        [ \(Parse.Type3 x _ _ _ _ _) -> realToFrac x
+        , \(Parse.Type3 _ x _ _ _ _) -> realToFrac x
+        , \(Parse.Type3 _ _ x _ _ _) -> realToFrac x
+        , \(Parse.Type3 _ _ _ x _ _) -> realToFrac x
+        , \(Parse.Type3 _ _ _ _ x _) -> realToFrac x
+        , \(Parse.Type3 _ _ _ _ _ x) -> realToFrac x
         ]
-  in graphAll fs . V.filter isC
+  in graphAll "03-" fs . V.filter Parse.is3
+
+graph5 :: V.Vector Parse.Packet -> IO ()
+graph5 =
+  let fs =
+        [ \(Parse.Type5 x _ _ _ _ _) -> realToFrac x
+        , \(Parse.Type5 _ x _ _ _ _) -> realToFrac x
+        , \(Parse.Type5 _ _ x _ _ _) -> realToFrac x
+        , \(Parse.Type5 _ _ _ x _ _) -> realToFrac x
+        , \(Parse.Type5 _ _ _ _ x _) -> realToFrac x
+        , \(Parse.Type5 _ _ _ _ _ x) -> realToFrac x
+        ]
+  in graphAll "05-" fs . V.filter Parse.is5
+
+graphV :: V.Vector Parse.Packet -> IO ()
+graphV =
+  let fs =
+        [ \(Parse.TypeV x _ _ _ _ _) -> realToFrac x
+        , \(Parse.TypeV _ x _ _ _ _) -> realToFrac x
+        , \(Parse.TypeV _ _ x _ _ _) -> realToFrac x
+        , \(Parse.TypeV _ _ _ x _ _) -> realToFrac x
+        , \(Parse.TypeV _ _ _ _ x _) -> realToFrac x
+        , \(Parse.TypeV _ _ _ _ _ x) -> realToFrac x
+        ]
+  in graphAll "0V-" fs . V.filter Parse.isV
+
+-- graph16 :: V.Vector Parse.Packet -> IO ()
+-- graph16 =
+--   let fs =
+--         [ \(Parse.Type16 x _ _ _ _ _) -> realToFrac x
+--         , \(Parse.Type16 _ x _ _ _ _) -> realToFrac x
+--         , \(Parse.Type16 _ _ x _ _ _) -> realToFrac x
+--         , \(Parse.Type16 _ _ _ x _ _) -> realToFrac x
+--         , \(Parse.Type16 _ _ _ _ x _) -> realToFrac x
+--         , \(Parse.Type16 _ _ _ _ _ x) -> realToFrac x
+--         ]
+--   in graphAll "16-" fs . V.filter Parse.is16
+
+graphFirstWord16 :: V.Vector Parse.Packet -> IO ()
+graphFirstWord16 =
+  let fs =
+        [ \(Parse.Unknown v) ->
+            realToFrac
+              (((fromIntegral (v V.! 0) `shiftL` 8)
+              .|. fromIntegral (v V.! 1) :: Integer) .&. 0x01ff)
+        ]
+  in graphAll "First-" fs . V.filter Parse.isUnknown
 
 offsetsC :: V.Vector Packet -> [(Int16, Integer)]
 offsetsC =
@@ -246,18 +312,6 @@ unSplit = V.fromList . f . V.toList
                 [x,y] -> fromIntegral x `shiftL` 8 .|. fromIntegral y
              )
         . chunksOf 2
-
-unGap = unGap64 . unGap1024
-
-unGap1024 :: Word16 -> Word16
-unGap1024 x =
-  let d = x `div` 1024
-  in x - 414 * d
-
-unGap64 :: Word16 -> Word16
-unGap64 x =
-  let d = x `div` 64
-  in x - 26 * d
 
 -- reverseBits :: Word8 -> Word8
 -- reverseBits i =
