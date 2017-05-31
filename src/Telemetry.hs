@@ -56,17 +56,26 @@ data Packet
   | Error Tag Payload T.Text
   deriving (Show)
 
-parseFile :: FilePath -> IO (V.Vector Packet)
-parseFile file =
-  runResourceT . runConduit $
-  (sourceFile file =$= linesUnboundedAsciiC =$= mapC readBS =$= swapPairs =$= splitBytes =$= parse =$=
-   sinkVector)
+-- parseFile :: FilePath -> IO (V.Vector Packet)
+-- parseFile file =
+--   runResourceT . runConduit $
+--   (sourceFile file =$= linesUnboundedAsciiC =$= mapC readBS =$= swapPairs =$= splitBytes =$= parse =$=
+--    sinkVector)
 
 parseFile' :: FilePath -> IO (V.Vector Parse.Packet)
 parseFile' file =
   runResourceT . runConduit $
-  (sourceFile file =$= linesUnboundedAsciiC =$= mapC readBS =$= splitBytes =$= Parse.parse =$=
+  (sourceFile file =$= linesUnboundedAsciiC =$= mapC readBS =$=
+   splitBytes =$=
+   Parse.parse =$=
    sinkVector)
+
+bs :: IO (V.Vector Parse.Packet)
+bs = do
+  a <- parseFile' "bits"
+  b <- parseFile' "bits2"
+  c <- parseFile' "bits3"
+  pure $ mconcat [a, b, c]
 
 readBS :: Read a => BS8.ByteString -> a
 readBS = read . BS8.unpack
@@ -226,6 +235,21 @@ myFilter = V.filter (none [isC, isA0])
 none :: [a -> Bool] -> a -> Bool
 none fs x = not $ any ($x) fs
 
+graph1 :: V.Vector Parse.Packet -> IO ()
+graph1 =
+  let fs =
+        [ \(Parse.Type1 x _ _ _ _ _ _ _) -> realToFrac x
+        , \(Parse.Type1 _ x _ _ _ _ _ _) -> realToFrac x
+        , \(Parse.Type1 _ _ x _ _ _ _ _) -> realToFrac x
+        , \(Parse.Type1 _ _ _ x _ _ _ _) -> realToFrac x
+        , \(Parse.Type1 _ _ _ _ x _ _ _) -> realToFrac x
+        , \(Parse.Type1 _ _ _ _ _ x _ _) -> realToFrac x
+        , \(Parse.Type1 _ _ _ _ _ _ x _) -> realToFrac x
+        , \(Parse.Type1 _ _ _ _ _ _ _ x) -> realToFrac x
+        -- , \(Parse.Type1 _ _ _ _ _ _ _ _ x) -> realToFrac x
+        ]
+  in graphAll "01-" fs . V.filter Parse.is1
+
 graph3 :: V.Vector Parse.Packet -> IO ()
 graph3 =
   let fs =
@@ -238,17 +262,31 @@ graph3 =
         ]
   in graphAll "03-" fs . V.filter Parse.is3
 
-graph5 :: V.Vector Parse.Packet -> IO ()
-graph5 =
+graph4 :: V.Vector Parse.Packet -> IO ()
+graph4 =
   let fs =
-        [ \(Parse.Type5 x _ _ _ _ _) -> realToFrac x
-        , \(Parse.Type5 _ x _ _ _ _) -> realToFrac x
-        , \(Parse.Type5 _ _ x _ _ _) -> realToFrac x
-        , \(Parse.Type5 _ _ _ x _ _) -> realToFrac x
-        , \(Parse.Type5 _ _ _ _ x _) -> realToFrac x
-        , \(Parse.Type5 _ _ _ _ _ x) -> realToFrac x
+        [ \(Parse.Type4 x _ _ _ _ _) -> realToFrac x
+        , \(Parse.Type4 _ x _ _ _ _) -> realToFrac x
+        , \(Parse.Type4 _ _ x _ _ _) -> realToFrac x
+        , \(Parse.Type4 _ _ _ x _ _) -> realToFrac x
+        , \(Parse.Type4 _ _ _ _ x _) -> realToFrac x
+        , \(Parse.Type4 _ _ _ _ _ x) -> realToFrac x
         ]
-  in graphAll "05-" fs . V.filter Parse.is5
+  in graphAll "04-" fs . V.filter Parse.is4
+
+graph2 :: V.Vector Parse.Packet -> IO ()
+graph2 =
+  let fs =
+        [ \(Parse.Type2 x _ _ _ _ _ _ _) -> realToFrac x
+        , \(Parse.Type2 _ x _ _ _ _ _ _) -> realToFrac x
+        , \(Parse.Type2 _ _ x _ _ _ _ _) -> realToFrac x
+        , \(Parse.Type2 _ _ _ x _ _ _ _) -> realToFrac x
+        , \(Parse.Type2 _ _ _ _ x _ _ _) -> realToFrac x
+        , \(Parse.Type2 _ _ _ _ _ x _ _) -> realToFrac x
+        , \(Parse.Type2 _ _ _ _ _ _ x _) -> realToFrac x
+        , \(Parse.Type2 _ _ _ _ _ _ _ x) -> realToFrac x
+        ]
+  in graphAll "02-" fs . V.filter Parse.is2
 
 graphV :: V.Vector Parse.Packet -> IO ()
 graphV =
@@ -294,12 +332,6 @@ offsets2C ps =
   let os = snd <$> offsetsC ps
       ds = (zipWith (-) <*> tail) . (filter ((<10000) . abs)) $ os
   in ds
-
-score :: FilePath -> IO Integer
-score f = do
-  ps <- parseFile f
-  let is = offsets2C ps
-  pure $ sum (abs <$> is)
 
 sign :: Word16 -> Int16
 sign = fromIntegral

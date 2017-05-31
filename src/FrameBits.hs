@@ -4,6 +4,7 @@
 module FrameBits
   ( FrameBits(..)
   , extractWords
+  , extractWordsCareful
   ) where
 
 import           Data.Bits
