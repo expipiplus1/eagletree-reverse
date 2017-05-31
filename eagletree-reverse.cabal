@@ -36,6 +36,7 @@ executable reverse
                      , transformers
                      , integer-gmp
                      , conduit-combinators
+                     , mono-traversable
                      , data-default-class
                      , extra
                      , ffmpeg-light
